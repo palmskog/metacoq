@@ -1235,26 +1235,6 @@ Proof.
 Qed.
   
 
-Lemma eq_universe_refl φ s : eq_universe φ s s.
-Proof.
-  intros vH; reflexivity.
-Qed.
-
-Lemma eq_universe'_refl `{checker_flags} φ s : eq_universe' φ s s.
-Proof.
-  unfold eq_universe'; destruct check_univs; [apply eq_universe_refl|constructor].
-Qed.
-
-Lemma leq_universe_refl φ s : leq_universe φ s s.
-Proof.
-  intros vH; reflexivity.
-Qed.
-
-Lemma leq_universe'_refl `{checker_flags} φ s : leq_universe' φ s s.
-Proof.
-  unfold leq_universe'; destruct check_univs; [apply leq_universe_refl|constructor].
-Qed.
-
 Lemma eq_term_upto_univ_refl R (HR : RelationClasses.Reflexive R) t
   : eq_term_upto_univ R t t.
 Proof.

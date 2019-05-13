@@ -1528,17 +1528,52 @@ Definition compare_bool b1 b2 :=
 
 Definition bool_lt' b1 b2 := match compare_bool b1 b2 with Lt => true | _ => false end.
 
-Definition non_empty_list (A : Set) := {l : list A & [] <> l}.
+Lemma le_hset {n m} (p q : n <= m) : p = q.
+Admitted.
 
-Definition make_non_empty_list {A} x l : non_empty_list A
-  := (x :: l; @nil_cons _ _ _).
+Require Import Omega.
 
-Lemma map_not_empty {A B} (f : A -> B) l : map f l <> [] -> l <> [].
-Proof.
-  intro H; destruct l; intro e; now apply H.
-Qed.
+(** * Non Empty List *)
+Module NEL.
+  Definition t (A : Set) := {l : list A & #|l| > 0}.
 
-Lemma not_empty_map {A B} (f : A -> B) l : l <> [] -> map f l <> [].
-Proof.
-  intro H; destruct l; intro e; now apply H.
-Qed.
+  Program Definition map {A B : Set} (f : A -> B) : t A -> t B
+    := fun l => (List.map f l.1; _).
+  Next Obligation.
+    rewrite map_length. exact l.2.
+  Defined.
+
+  Definition make {A} x l : t A
+    := (x :: l; gt_Sn_O _).
+
+  Definition cons {A} x (l : t A) : t A
+    := make x l.1.
+
+  Definition eq {A} (l l' : t A)
+    : l.1 = l'.1 -> l = l'.
+  Proof.
+    destruct l as [l Hl], l' as [l' Hl']; cbn.
+    destruct 1. now rewrite (le_hset Hl Hl').
+  Qed.
+
+  Program Definition app {A} (l l' : t A) : t A
+    := (l.1 ++ l'.1; _).
+  Next Obligation.
+    rewrite app_length. pose proof l.2. cbn in *. omega.
+  Qed.
+
+  Program Definition app_l {A} (l : t A) (l' : list A) : t A
+    := (l.1 ++ l'; _).
+  Next Obligation.
+    rewrite app_length. pose proof l.2. cbn in *. omega.
+  Qed.
+
+  Program Definition app_r {A : Set} (l : list A) (l' : t A) : t A
+    := (l ++ l'.1; _).
+  Next Obligation.
+    rewrite app_length. pose proof l'.2. cbn in *. omega.
+  Qed.
+
+End NEL.
+
+Definition non_empty_list := NEL.t.
