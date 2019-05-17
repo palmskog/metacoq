@@ -2,7 +2,7 @@ Require Import Nat Bool String BinInt List Relations Lia.
 Import ListNotations.
 Require MSets.MSetWeakList.
 Require Import MSetFacts MSetProperties.
-From Template Require Import utils config Universes monad_utils.
+From Template Require Import utils config Universes wGraph monad_utils.
 Import ConstraintType. Import MonadNotation.
 Local Open Scope nat_scope.
 
@@ -129,6 +129,8 @@ Qed.
 Definition my_satisfies v : GoodConstraintSet.t -> bool :=
   GoodConstraintSet.for_all (my_satisfies0 v).
 
+Definition my_consistent ctrs : Prop := exists v, my_satisfies v ctrs.
+
 Lemma if_true_false (b : bool) : (if b then true else false) = b.
   destruct b; reflexivity.
 Qed.
@@ -246,32 +248,11 @@ Proof.
 Qed.
 
 
-
 (* vertices of the graph are levels which are not Prop *)
-Inductive vertice := lSet | Level (_ : string) | Var (_ : nat).
+(* ltv : level to vertice *)
+Inductive vertice := lSet | ltv (l : my_level).
 
-(* vertive to level *)
-Definition vtl (v : vertice) : Level.t :=
-  match v with
-  | lSet => Level.lSet
-  | Level x => Level.Level x
-  | Var x => Level.Var x
-  end.
-
-(* level to vertice *)
-Definition ltv (l : universe_level) : option vertice :=
-  match l with
-  | Level.lProp => None
-  | Level.lSet => Some lSet
-  | Level.Level x => Some (Level x)
-  | Level.Var x => Some (Var x)
-  end.
-
-(* true is for 0, false for -1 *)
-Definition edge : Set := vertice * bool * vertice.
-
-(* bool to Z *)
-Definition btz (b : bool) : Z := if b then 0 else -1.
+Coercion ltv : my_level >-> vertice.
 
 Module VerticeDec.
   Definition t : Set := vertice.
@@ -281,341 +262,260 @@ Module VerticeDec.
   Definition eq_sym : forall x y : t, eq x y -> eq y x := @eq_sym _.
   Definition eq_trans : forall x y z : t, eq x y -> eq y z -> eq x z := @eq_trans _.
   Definition eq_dec : forall x y : t, {eq x y} + {~ eq x y}.
-    unfold eq.
-    decide equality. apply string_dec. apply Peano_dec.eq_nat_dec.
+    unfold eq. decide equality. apply GoodConstraintDec.my_level_dec. 
   Defined.
-Definition eqb : t -> t -> bool := fun x y => if eq_dec x y then true else false.
+  Definition eqb : t -> t -> bool := fun x y => if eq_dec x y then true else false.
 End VerticeDec.
-Module VerticeSet <: MSetInterface.WSetsOn VerticeDec := MSets.MSetWeakList.Make VerticeDec.
-Module VerticeMap := FSets.FMapWeakList.Make VerticeDec.
 
-Module EdgeDec.
-  Definition t : Set := edge.
-  Definition eq : t -> t -> Prop := eq.
-  Definition eq_equiv : RelationClasses.Equivalence eq := _.
-  Definition eq_dec : forall x y : t, {eq x y} + {~ eq x y}.
-    unfold eq.
-    decide equality. apply VerticeDec.eq_dec.
-    decide equality. apply Bool.bool_dec.
-    (* apply ZArith_dec.Z_eq_dec. *)
-    apply VerticeDec.eq_dec.
-  Defined.
-End EdgeDec.
-Module EdgeSet <: MSetInterface.WSetsOn EdgeDec := MSets.MSetWeakList.Make EdgeDec.
+Module Import wGraph := wGraph.WeightedGraph VerticeDec.
 
-(* If [None] the constraint is inconsistent *)
-(* If [Some empty] the constraint is useless *)
-(* Set < l or Set <= l are supposed to be yet present in the graph *)
-Definition edges_of_constraint (uc : univ_constraint) : option EdgeSet.t
-  := let '(l1, t, l2) := uc in
-     match ltv l1, t, ltv l2 with
-     (* l <= Prop or l < Prop or l = Prop *)
-     | _, _, None => None
-     (* Prop <= l *)
-     | None, Le, _ => Some EdgeSet.empty
-     (* Prop = l *)
-     | None, Eq, _ => None
-     (* Prop < l  ->  idem as Set <= l *)
-     | None, Lt, _ => Some EdgeSet.empty
+Definition init_graph := (VSet.singleton lSet, EdgeSet.empty, lSet).
 
-     | Some lSet, Eq, Some (Level _) => None
-     | Some (Level _), Eq, Some lSet => None
-     | _, Lt, Some lSet => None
-     | Some lSet, Le, Some _ => Some EdgeSet.empty
-
-     | Some l, Le, Some l' => Some (EdgeSet.singleton (l, true, l'))
-     | Some l, Lt, Some l' => Some (EdgeSet.singleton (l, false, l'))
-     | Some l, Eq, Some l' => Some (EdgeSet.add (l', true, l) (EdgeSet.singleton (l, true, l')))
-     end.
-
-     (* (* l <= Prop or l < Prop or l = Prop *) *)
-     (* | _, _, Level.lProp => None *)
-     (* (* Prop <= l *) *)
-     (* | (Level.lProp, Le, _) => Some EdgeSet.empty *)
-     (* (* Prop = l *) *)
-     (* | (Level.lProp, Eq, _) => None *)
-     (* (* Prop < l  ->  idem as Set <= l *) *)
-     (* | (Level.lProp, Lt, _) => Some EdgeSet.empty *)
-
-     (* (* Set <= l *) *)
-     (* | (Level.lSet, Le, _) => Some EdgeSet.empty *)
-     (* (* Set < l *) *)
-     (* | (Level.lSet, Lt, Level.lSet) => None *)
-     (* | (Level.lSet, Lt, Level.Level _) => Some EdgeSet.empty *)
-     (* | (Level.lSet, Lt, Level.Var x) => Some (EdgeSet.singleton (lSet, true, Var x)) *)
-     (* (* Set = l *) *)
-     (* | (Level.lSet, Eq, Level.lSet) => Some EdgeSet.empty *)
-     (* | (Level.lSet, Eq, Level.Level _) => None *)
-     (* | (Level.lSet, Eq, Level.Var x) => Some (EdgeSet.singleton (Var x, true, lSet)) *)
-     (* (* l <= Set *) *)
-     (* | (Level.Level l, Le, Level.lSet) =>  Some (EdgeSet.singleton (Level l, true, lSet)) *)
-     (* | (Level.Var l, Le, Level.lSet) =>  Some (EdgeSet.singleton (Var l, true, lSet)) *)
-     (* (* l < Set *) *)
-     (* | (_, Lt, Level.lSet) => None *)
-     (* (* l = Set *) *)
-     (* | (Level.Level _, Eq, Level.lSet) =>  None *)
-     (* | (Level.Var l, Eq, Level.lSet) =>  Some (EdgeSet.singleton (Var l, true, lSet)) *)
-                                            
-     (* (* l <= l' *) *)
-     (* | (Level.Level l, Le, Level.Level l') =>  Some (EdgeSet.singleton (Level l, true, Level l')) *)
-     (* | (Level.Var l, Le, Level.Level l') =>  Some (EdgeSet.singleton (Var l, true, Level l')) *)
-     (* | (Level.Level l, Le, Level.Var l') =>  Some (EdgeSet.singleton (Level l, true, Var l')) *)
-     (* | (Level.Var l, Le, Level.Var l') =>  Some (EdgeSet.singleton (Var l, true, Var l')) *)
-     (* (* l < l' *) *)
-     (* | (Level.Level l, Lt, Level.Level l') =>  Some (EdgeSet.singleton (Level l, false, Level l')) *)
-     (* | (Level.Var l, Lt, Level.Level l') =>  Some (EdgeSet.singleton (Var l, false, Level l')) *)
-     (* | (Level.Level l, Lt, Level.Var l') =>  Some (EdgeSet.singleton (Level l, false, Var l')) *)
-     (* | (Level.Var l, Lt, Level.Var l') =>  Some (EdgeSet.singleton (Var l, false, Var l')) *)
-
-     (* (* l = l' *) *)
-     (* | (Level.Level l, Eq, Level.Level l') =>  Some (EdgeSet.add (Level l', true, Level l) (EdgeSet.singleton (Level l, true, Level l'))) *)
-     (* | (Level.Var l, Eq, Level.Level l') =>  Some (EdgeSet.add (Level l', true, Var l) (EdgeSet.singleton (Var l, true, Level l'))) *)
-     (* | (Level.Level l, Eq, Level.Var l') =>  Some (EdgeSet.add (Var l', true, Level l) (EdgeSet.singleton (Level l, true, Var l'))) *)
-     (* | (Level.Var l, Eq, Level.Var l') =>  Some (EdgeSet.add (Var l', true, Var l) (EdgeSet.singleton (Var l, true, Var l'))) *)
-     (* end. *)
-
-(* If [None] the set of constraints is naively inconsistent *)
-Definition edges_of_constraints (ctrs : constraints) : option EdgeSet.t :=
-  ConstraintSet.fold (fun uc S => match edges_of_constraint uc, S with
-                               | Some S1, Some S2 => Some (EdgeSet.union S1 S2)
-                               | _, _ => None end) ctrs (Some EdgeSet.empty).
-
-
-(* Prop is never in the graph *)
-(* Nodes of the graph are nodes of the constraints + Set *)
-(* For each universe, at least the constraint l > Set or l >= Set is here *)
-Definition t  := VerticeSet.t × EdgeSet.t.
-
-Definition init_graph : t :=
-  (VerticeSet.singleton lSet, EdgeSet.empty).
-
-(* without Prop nor Set *)
-Definition nodes_of_level (l : universe_level) : VerticeSet.t :=
-  match ltv l with
-  | None => VerticeSet.empty
-  | Some l=> VerticeSet.singleton l
-  end.
-
-Definition nodes_of_constraint (ctr : univ_constraint) : VerticeSet.t :=
-  let '(l1, _, l2) := ctr in
-  VerticeSet.union (nodes_of_level l1) (nodes_of_level l2).
-
-Definition add_nodes_of_constraints (ctrs : constraints) :=
-  ConstraintSet.fold (fun ctr => VerticeSet.union (nodes_of_constraint ctr)) ctrs.
-
-(* If [None] the set of constraints is naively inconsistent *)
-Definition make_graph (ctrs : constraints) : option t
-  := let V := add_nodes_of_constraints ctrs (VerticeSet.singleton lSet) in
-     let E0 := VerticeSet.fold (fun v S => match v with
-                                 | Level l => EdgeSet.add (lSet, false, Level l) S
-                                 | Var l => EdgeSet.add (lSet, true, Var l) S
-                                 | _ => S end) V EdgeSet.empty in
-     match edges_of_constraints ctrs with
-     | Some E1 => Some (V, EdgeSet.union E0 E1)
-     | None => None
-     end.
-
-Section Graph.
-  Context (φ : t).
-
-  Inductive R0s : vertice -> vertice -> Prop :=
-  | R00 l : R0s l l
-  | R01 l1 l2 l3 : R0s l1 l2 -> EdgeSet.In (l2,true,l3) (snd φ) -> R0s l1 l3.
-
-  (* Definition R0s_dec : forall x y, {R0s y x} + {~ R0s y x}. *)
-  (* Proof. *)
-
-
-  Inductive R : vertice -> vertice -> Prop :=
-  | Rintro l1 l2 l3 l4 : R0s l1 l2 -> EdgeSet.In (l2,false,l3) (snd φ)
-                         -> R0s l3 l4 -> R l1 l4.
-
-  Definition acyclic := forall l, Acc R l.
-
-  Definition Rs : relation vertice :=
-    clos_trans _ (fun l l' => EdgeSet.In (l, true, l') (snd φ)
-                           \/ EdgeSet.In (l, false, l') (snd φ)).
-  
-  Definition R_dec : forall x y, {R y x} + {~ R y x}.
-  (* Proof. *)
-  (*   intros x y H; revert y; induction H; intro y. *)
-  (*   pose (VerticeSet.exists_ (fun pred => EdgeSet.exists_ (fun e => (VerticeDec.eqb (fst (fst e)) pred) && (VerticeDec.eqb (snd e) x)) (snd φ)) (fst φ)). *)
-  (*   case_eq b; intro ee. *)
-  (*   subst b. apply VerticeSet.exists_spec in ee. *)
-    
-  (*   remember b. *)
-  (*   destruct b0. *)
-  (*   assert (pred : vertice). *)
-  Admitted.    
-
-
-  Conjecture Rs_dec : forall x y, {Rs y x} + {~ Rs y x}.
-
-  Fixpoint filter_pack {A} (P : A -> Prop) (HP : forall x, {P x} + {~ P x})
-           (l : list A) {struct l} : list {x : A & P x} :=
-    match l with
-    | [] => []
-    | x :: l => match HP x with
-               | left p => (existT _ _ p) :: (filter_pack P HP l)
-               | right _ => filter_pack P HP l
-               end
-    end.
-
-  Definition d (s l : vertice) (H : Acc R l) : option Z.
-    destruct (Rs_dec s l) as [_|_]; [apply Some|apply None].
-    induction H as [v H d].
-    simple refine (let preds := filter_pack (fun v' => R v' v) (R_dec v)
-                                            (VerticeSet.elements (fst φ)) in _).
-    exact (List.fold_left (fun n X => Z.min n (d X.1 X.2)) preds 0).
-  Defined.
-
-End Graph.  
-
-Definition d_Set ctrs φ (e : make_graph ctrs = Some φ)
-  : forall l, VerticeSet.In l (fst φ) -> Rs φ lSet l.
-Abort.
-
-Definition valuation_of_graph φ (H: well_founded (R φ)) : valuation.
+Lemma init_graph_invariants : invariants init_graph.
 Proof.
-  pose (V := fst φ). pose (E := snd φ).
-  unshelve econstructor.
-  refine (fun s => if VerticeSet.mem (Level s) V then BinIntDef.Z.to_pos (option_get 1 (d φ lSet (Level s) (H _))) else 1%positive).
-  refine (fun n => if VerticeSet.mem (Var n) V then Z.to_nat (option_get 0 (d φ lSet (Var n) (H _))) else 0%nat).
+  repeat split; cbn in *.
+  all: try inversion H.
+  constructor; reflexivity.
+  intros x H. apply VSet.singleton_spec in H.
+  rewrite H. apply rt_refl.
 Defined.
 
-Lemma Acc_ok1 ctrs : (exists φ, make_graph ctrs = Some φ /\ well_founded (R φ)) -> consistent ctrs.
+Definition edge_of_level (l : my_level) : EdgeSet.elt :=
+  match l with
+  | mLevel l => (lSet, 1, ltv (mLevel l))
+  | mVar n => (lSet, 0, ltv (mVar n))
+  end.
+
+Definition EdgeSet_pair x y
+  := EdgeSet.add y (EdgeSet.singleton x).
+Definition EdgeSet_triple x y z
+  := EdgeSet.add z (EdgeSet_pair x y).
+
+Definition edges_of_constraint (gc : good_constraint) : list EdgeSet.elt :=
+  match gc with
+  | gc_le l l' => [(edge_of_level l); (edge_of_level l'); (ltv l, 0, ltv l')]
+  | gc_lt l l' => [(edge_of_level l); (edge_of_level l'); (ltv l, 1, ltv l')]
+  | gc_lt_set n => [(lSet, 1, ltv (mVar n))]
+  | gc_eq_set n => [(ltv (mVar n), 0, lSet); (lSet, 0, ltv (mVar n))]
+  end.
+
+Definition add_edges edges := fold_left add_edge edges.
+
+Lemma add_edges_invariants {G} (HG : invariants G) {gc}
+  : invariants (add_edges (edges_of_constraint gc) G).
 Proof.
-  intros [φ [H1 H2]].
-  exists (valuation_of_graph φ H2).
-  unfold satisfies. intros [[l1 []] l2] Huc; constructor.
-  - destruct l1, l2.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * cbn.
- assert (e: d φ lSet (Level s) (H2 (Level s)) < d φ lSet (Level s0) (H2 (Level s0))).
- 
-
-assert (d φ lSet l1 < d φ lSet l2).
+  destruct HG as [H1 [H2 H3]].
+  repeat split.
+Admitted.
 
 
-  unfold satisfies0. intros uc Huc.
-  
+Definition make_graph (ctrs : GoodConstraintSet.t) : t
+  := GoodConstraintSet.fold (add_edges ∘ edges_of_constraint)
+                            ctrs init_graph.
 
-  revert φ H1 H2.
-  induction ctrs using ConstraintSetProp.set_induction;
-    intros φ H1 H2.
-  - intros x Hx. apply False_rect.
-    apply (ConstraintSetFact.empty_iff x).
-    eapply ConstraintSetFact.In_m. reflexivity.
-    2: eassumption. symmetry.
-    now apply ConstraintSetProp.empty_is_empty_1.
-  - assert (satisfies0 (valuation_of_graph φ H2) x) . {
-      assert (Hc : ConstraintSet.In x ctrs2). admit. (* ok *)
-      clear H H0 IHctrs1 ctrs1.
-      destruct x as [[l1 []] l2]; econstructor.
-      + destruct l1, l2.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * admit.
-        * cbn. assert (e: VerticeSet.mem (Level s) (fst φ) = true). admit.
-          rewrite e.
-          assert ((d φ lSet (Level s) (H2 (Level s))) < (d φ lSet (Level s) (H2 (Level s0)))).
+Definition labelling_of_valuation (v : valuation) : labelling
+  := fun x => match x with
+           | lSet => 0
+           | ltv (mLevel l) => Pos.to_nat (v.(valuation_mono) l)
+           | ltv (mVar n) => v.(valuation_poly) n
+           end.
 
-}
+Definition valuation_of_labelling (l : labelling) : valuation
+  := {| valuation_mono := fun s => Pos.of_nat (l (ltv (mLevel s)));
+        valuation_poly := fun n => l (ltv (mVar n)) |}.
 
- unfold make_graph in H1.
-    unfold edges_of_constraints in H1.
-    rewrite ConstraintSetProp.fold_1b in H1.
-    unfold add_nodes_of_constraints in H1.
-    rewrite ConstraintSetProp.fold_1b in H1.
+Section Spec.
+  Context (ctrs : GoodConstraintSet.t).
+  Let G := make_graph ctrs.
+
+  Lemma make_graph_invariants : invariants G.
+  Proof.
+    subst G; unfold make_graph. rewrite GoodConstraintSet.fold_spec.
+    pose proof init_graph_invariants as HG.
+    set (G := init_graph) in *. clearbody G; revert G HG.
+    set (l := GoodConstraintSet.elements ctrs). induction l.
+    - easy.
+    - intros G HG; cbn. apply IHl. now apply add_edges_invariants.
+  Qed.
+
+  Definition make_graph_edge
+    : forall x, VSet.In (ltv x) (wGraph.V G) -> EdgeSet.In (edge_of_level x) (wGraph.E G).
+  Proof.
+    subst G; unfold make_graph. rewrite GoodConstraintSet.fold_spec.
+    set (G := init_graph) in *. 
+    assert (HG : forall x, VSet.In (ltv x) (wGraph.V G)
+                      -> EdgeSet.In (edge_of_level x) (wGraph.E G)). {
+      subst G. cbn. intros x H; apply VSet.singleton_spec in H.
+      inversion H. }
+    clearbody G; revert G HG.
+    set (l := GoodConstraintSet.elements ctrs). induction l.
+    - cbn. easy.
+    - intros G HG; cbn. apply IHl. intro x.
+      destruct a; cbn.
+      + destruct m, m0; cbn.
+  Admitted.
+
+  Lemma source_make_graph : wGraph.s G = lSet.
+  Proof.
+    subst G; unfold make_graph. rewrite GoodConstraintSet.fold_spec.
+    set (G := init_graph). 
+    assert (HG : wGraph.s G = lSet) by reflexivity.
+    clearbody G; revert G HG.
+    induction (GoodConstraintSet.elements ctrs).
+    intros; assumption.
+    intros G HG; cbn. apply IHl.
+    clear -HG.
+    revert G HG. induction (edges_of_constraint a).
+    intros G HG; assumption.
+    intros G HG. cbn; apply IHl; assumption.
+  Qed.
+
+  Lemma valuation_labelling_eq l (Hl : correct_labelling G l)
+    : forall x, VSet.In x (wGraph.V G)
+           -> labelling_of_valuation (valuation_of_labelling l) x = l x.
+  Proof.
+    destruct x; cbn.
+    - intros _. apply proj1 in Hl; cbn in Hl.
+      etransitivity. symmetry; eassumption.
+      f_equal. apply source_make_graph.
+    - destruct l0; cbn. 2: reflexivity.
+      intro Hs. apply Nat2Pos.id.
+      apply make_graph_edge in Hs.
+      apply (proj2 Hl) in Hs; cbn in Hs. lia.
+  Qed.
+
+  Lemma toto e :
+    EdgeSet.In e (wGraph.E G) <-> 
+    (exists l, e = edge_of_level l) \/ (GoodConstraintSet.Exists (fun gc => In e (edges_of_constraint gc)) ctrs).
+  Admitted.
+
+  Lemma make_graph_gc gc :
+    GoodConstraintSet.In gc ctrs
+    -> Forall (fun e => EdgeSet.In e (wGraph.E G)) (edges_of_constraint gc).
+  Proof.
+    subst G; unfold make_graph. rewrite GoodConstraintSet.fold_spec.
+    intro H; apply GoodConstraintSetProp.FM.elements_1 in H.
+    set (l := GoodConstraintSet.elements ctrs) in *.
+    set (G := init_graph). 
+    assert (HG : In gc l
+        \/ Forall (fun e => EdgeSet.In e (wGraph.E G)) (edges_of_constraint gc)). {
+      left. apply InA_alt in H. now destruct H as [y [[]]]. }
+    clearbody G; revert G HG; clear H.
+    induction l.
+    - intros G []. inversion H. assumption.
+    - intros G HG; cbn. apply IHl.
+      destruct HG as [H1|H2].
+      + inversion_clear H1.
+        * right. subst.
+          destruct gc; cbn; repeat constructor.
+          admit.
+        * now left.
+      + right. admit.
+  Qed.
+    
+  Admitted.
+
+  (* TODO: This proof should be better written *)
+  Lemma make_graph_spec v :
+    my_satisfies v ctrs <-> correct_labelling G (labelling_of_valuation v).
+  Proof.
+    unfold my_satisfies, correct_labelling. split; intro H.
+    - split. now rewrite source_make_graph.
+      intros e He. apply toto in He. induction He.
+      + destruct H0 as [[]]; cbn in H0; subst; cbn; lia.
+      + apply GoodConstraintSet.for_all_spec in H.
+        2: intros x y []; reflexivity.
+        destruct H0 as [[] [H1 H2]]; cbn in *.
+        * destruct H2 as [|[|[|[]]]].
+          -- destruct m; subst; cbn in *; lia.
+          -- destruct m0; subst; cbn in *; lia.
+          -- specialize (H _ H1); cbn in H. apply PeanoNat.Nat.leb_le in H.
+             subst; clear H1. destruct m, m0; simpl in *; lia.
+        * destruct H2 as [|[|[|[]]]].
+          -- destruct m; subst; cbn in *; lia.
+          -- destruct m0; subst; cbn in *; lia.
+          -- specialize (H _ H1); cbn in H.
+             case_eq (my_val0 v m0). intro eq; rewrite eq in H.
+             discriminate.
+             intros n eq; rewrite eq in H.
+             apply PeanoNat.Nat.leb_le in H.
+             subst; clear H1. destruct m, m0; simpl in *; lia.
+        * destruct H2 as [|[]]. subst.
+          specialize (H _ H1); cbn in H.
+          case_eq (valuation_poly v n). intro eq; rewrite eq in H.
+          discriminate.
+          intros n0 eq; rewrite eq in H.
+          cbn. rewrite eq; lia.
+        * destruct H2 as [|[|[]]]. subst.
+          -- specialize (H _ H1); cbn in H.
+             case_eq (valuation_poly v n). intro eq; rewrite eq in H.
+             cbn. rewrite eq; lia.
+             intros n0 eq; rewrite eq in H; discriminate.
+          -- subst; cbn.
+             specialize (H _ H1); cbn in H.
+             case_eq (valuation_poly v n). intro; lia.
+             intros n0 eq; rewrite eq in H; discriminate.
+    - apply GoodConstraintSet.for_all_spec.
+      intros x y []; reflexivity.
+      intros gc Hgc. apply tata in Hgc.
+      apply proj2 in H.
+      destruct gc; cbn in *.
+      + inversion_clear Hgc. inversion_clear H1. inversion_clear H3.
+        specialize (H _ H1); clear -H. cbn in *.
+        destruct m, m0; cbn; apply PeanoNat.Nat.leb_le; lia.
+      + inversion_clear Hgc. inversion_clear H1. inversion_clear H3.
+        specialize (H _ H1); clear -H. cbn in *.
+        case_eq (my_val0 v m0); intro e.
+        destruct m, m0; cbn in *; lia.
+        intro ee. apply PeanoNat.Nat.leb_le.
+        destruct m, m0; cbn in *; lia.
+      + inversion_clear Hgc. specialize (H _ H0); clear -H. cbn in *.
+        case_eq (valuation_poly v n); intros; try reflexivity; lia.
+      + inversion_clear Hgc. specialize (H _ H0); clear -H. cbn in *.
+        case_eq (valuation_poly v n); intros; try reflexivity; lia.
+  Qed.
 
 
-Definition is_Some {A} (x : option A) := exists a, x = Some a.
 
-Conjecture Acc_ok : forall ctrs, consistent ctrs <-> exists φ, make_graph ctrs = Some φ /\ well_founded (R φ).
+  Corollary make_graph_spec' l :
+    (* my_satisfies (valuation_of_labelling l) ctrs <-> correct_labelling G l. *)
+    correct_labelling G l -> my_satisfies (valuation_of_labelling l) ctrs.
+  Proof.
+    intro H. apply (make_graph_spec (valuation_of_labelling l)).
+    unfold correct_labelling; intuition.
+    now rewrite source_make_graph.
+    destruct make_graph_invariants as [H1 _].
+    rewrite !valuation_labelling_eq; firstorder. 
+  Qed.
 
-Conjecture d_ok   : forall ctrs φ (e : make_graph ctrs = Some φ) (H : well_founded (R φ)) l l',
-    (exists k, forall v, satisfies v ctrs -> (val0 v (vtl l) <= (val0 v (vtl l')) + k)%Z)
-    <-> is_Some (d φ l l' (H _)).
+  Corollary make_graph_spec2 :
+    my_consistent ctrs <-> exists l, correct_labelling G l.
+  Proof.
+    split.
+    - intros [v H]. exists (labelling_of_valuation v).
+      apply make_graph_spec. assumption.
+    - intros [l Hl]. exists (valuation_of_labelling l).
+      apply make_graph_spec'. assumption.
+  Defined.
+End Spec.
 
-Conjecture d_ok2  : forall ctrs φ (e : make_graph ctrs = Some φ) (H : well_founded (R φ)) l l' k,
-    (forall v, satisfies v ctrs -> (val0 v (vtl l) <= (val0 v (vtl l')) + k)%Z)
-    <-> (forall k', d φ l l' (H _) = Some k' -> k >= k').
 
 
 
 
-Section BellmanFord.
 
-  Context (φ : t).
 
-  (* Z ∪ +∞ *)
-  (* None is for +∞ *)
-  Definition Zbar := Z.
 
-  (* For each node: predecessor and distance from the source *)
-  Definition pred_graph := VerticeMap.t (vertice * Zbar).
 
-  (* Definition add_node_pred_graph n : pred_graph -> pred_graph *)
-  (* := VerticeMap.add n None. *)
 
-  Definition init_pred_graph s : pred_graph :=
-    (* let G := EdgeSet.fold *)
-    (* (fun '(l1,_,l2) G => add_node_pred_graph l2 (add_node_pred_graph l1 G)) *)
-    (* φ (VerticeMap.empty _) in *)
-    VerticeMap.add s (s, 0) (VerticeMap.empty _).
 
-  Definition relax (e : edge) (G : pred_graph) : pred_graph :=
-    let '((u, w), v) := e in
-    match VerticeMap.find u G, VerticeMap.find v G with
-    | Some (_, ud), Some (_, vd) => if vd >? (ud + btz w) then
-                                     VerticeMap.add v (u, ud + btz w) G
-                                   else G
-    | Some (_, ud), None => VerticeMap.add v (u, ud + btz w) G
-    | _, _ => G
-    end.
 
-  Definition BellmanFord s : pred_graph :=
-    let G := init_pred_graph s in
-    let G' := VerticeSet.fold (fun _ => EdgeSet.fold relax (snd φ)) (fst φ) G in
-    G'.
 
-  (* true if all is ok *)
-  Definition no_universe_inconsistency : bool :=
-    let G := BellmanFord lSet in
-    let negative_cycle := EdgeSet.exists_ (fun '((u,w),v) =>
-                          match VerticeMap.find u G, VerticeMap.find v G with
-                          | Some (_, ud), Some (_, vd) => Z.gtb vd (ud + btz w)
-                          | _, _ => false
-                          end) (snd φ) in
-    negb negative_cycle.
 
-  (** *** Universe comparisons *)
 
-  (* If enforce l1 l2 = Some n, the graph enforces that l2 is at least l1 + n *)
-  (* i.e. l1 + n <= l2 *)
-  (* If None nothing is enforced by the graph between those two levels *)
-  Definition enforce (u v : vertice) : option Z :=
-    let G := BellmanFord u in
-    match VerticeMap.find v G with
-    | Some (_, vd) => Some (Z.opp vd)
-    | None => None
-    end.
+
+
+
 
   Definition check_le_vertice (l1 l2 : vertice) : bool :=
     match enforce l1 l2 with
