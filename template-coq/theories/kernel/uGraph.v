@@ -1,8 +1,251 @@
-Require Import Bool String BinInt List Relations. Import ListNotations.
+Require Import Nat Bool String BinInt List Relations Lia.
+Import ListNotations.
 Require MSets.MSetWeakList.
-From Template Require Import utils config Universes.
-Import ConstraintType.
-Local Open Scope Z.
+Require Import MSetFacts MSetProperties.
+From Template Require Import utils config Universes monad_utils.
+Import ConstraintType. Import MonadNotation.
+Local Open Scope nat_scope.
+
+
+Module ConstraintSetFact := WFactsOn UnivConstraintDec ConstraintSet.
+Module ConstraintSetProp := WPropertiesOn UnivConstraintDec ConstraintSet.
+
+
+
+Inductive my_level := mLevel (_ : string) | mVar (_ : nat).
+
+Inductive good_constraint :=
+(* l <= l' *)
+| gc_le : my_level -> my_level -> good_constraint
+(* l < l' *)
+| gc_lt : my_level -> my_level -> good_constraint
+(* Set < Var n *)
+| gc_lt_set : nat -> good_constraint
+(* Set = Var n *)
+| gc_eq_set : nat -> good_constraint.
+
+
+Module GoodConstraintDec.
+  Definition t : Set := good_constraint.
+  Definition eq : t -> t -> Prop := eq.
+  Definition eq_equiv : RelationClasses.Equivalence eq := _.
+  Definition my_level_dec : forall x y : my_level, {x = y} + {x <> y}.
+    decide equality. apply string_dec. apply Peano_dec.eq_nat_dec.
+  Defined.
+  Definition eq_dec : forall x y : t, {eq x y} + {~ eq x y}.
+    unfold eq.
+    decide equality. all: try apply my_level_dec.
+    all: apply Peano_dec.eq_nat_dec.
+  Defined.
+End GoodConstraintDec.
+Module GoodConstraintSet := MSets.MSetWeakList.Make GoodConstraintDec.
+Module GoodConstraintSetFact := WFactsOn GoodConstraintDec GoodConstraintSet.
+Module GoodConstraintSetProp := WPropertiesOn GoodConstraintDec GoodConstraintSet.
+
+Definition GoodConstraintSet_pair x y
+  := GoodConstraintSet.add y (GoodConstraintSet.singleton x).
+
+(* None -> not satisfiable *)
+(* Some empty -> useless *)
+(* else: singleton or two elements set (l = l' -> {l<=l', l'<=l}) *)
+Definition gc_of_constraint (uc : univ_constraint) : option GoodConstraintSet.t
+  := let empty := Some GoodConstraintSet.empty in
+     let singleton := fun x => Some (GoodConstraintSet.singleton x) in
+     let pair := fun x y => Some (GoodConstraintSet_pair x y) in
+     match uc with
+     (* Prop _ _ *)
+     | (Level.lProp, Le, _) => empty
+     | (Level.lProp, Eq, Level.lProp) => empty
+     | (Level.lProp, Eq, _) => None
+     | (Level.lProp, Lt, Level.lProp) => None
+     | (Level.lProp, Lt, _) => empty
+
+     (* Set _ _ *)
+     | (Level.lSet, Le, Level.lProp) => None
+     | (Level.lSet, Le, _) => empty
+     | (Level.lSet, Eq, Level.lProp) => None
+     | (Level.lSet, Eq, Level.lSet) => empty
+     | (Level.lSet, Eq, Level.Level _) => None
+     | (Level.lSet, Eq, Level.Var n) => singleton (gc_eq_set n)
+     | (Level.lSet, Lt, Level.lProp) => None
+     | (Level.lSet, Lt, Level.lSet) => None
+     | (Level.lSet, Lt, Level.Level _) => empty
+     | (Level.lSet, Lt, Level.Var n) => singleton (gc_lt_set n)
+
+     (* Level _ _ *)
+     | (Level.Level _, Le, Level.lProp) => None
+     | (Level.Level _, Le, Level.lSet) => None
+     | (Level.Level l, Le, Level.Level l') => singleton (gc_le (mLevel l) (mLevel l'))
+     | (Level.Level l, Le, Level.Var n) => singleton (gc_le (mLevel l) (mVar n))
+     | (Level.Level _, Eq, Level.lProp) => None
+     | (Level.Level _, Eq, Level.lSet) => None
+     | (Level.Level l, Eq, Level.Level l') => pair (gc_le (mLevel l) (mLevel l')) (gc_le (mLevel l') (mLevel l))
+     | (Level.Level l, Eq, Level.Var n) => pair (gc_le (mLevel l) (mVar n)) (gc_le (mVar n) (mLevel l))
+     | (Level.Level _, Lt, Level.lProp) => None
+     | (Level.Level _, Lt, Level.lSet) => None
+     | (Level.Level l, Lt, Level.Level l') => singleton (gc_lt (mLevel l) (mLevel l'))
+     | (Level.Level l, Lt, Level.Var n) => singleton (gc_lt (mLevel l) (mVar n))
+
+     (* Var _ _ *)
+     | (Level.Var _, Le, Level.lProp) => None
+     | (Level.Var n, Le, Level.lSet) => singleton (gc_eq_set n)
+     | (Level.Var n, Le, Level.Level l) => singleton (gc_le (mVar n) (mLevel l))
+     | (Level.Var n, Le, Level.Var n') => singleton (gc_le (mVar n) (mVar n'))
+     | (Level.Var _, Eq, Level.lProp) => None
+     | (Level.Var n, Eq, Level.lSet) => singleton (gc_eq_set n)
+     | (Level.Var n, Eq, Level.Level l) => pair (gc_le (mVar n) (mLevel l)) (gc_le (mLevel l) (mVar n))
+
+     | (Level.Var n, Eq, Level.Var n') => pair (gc_le (mVar n) (mVar n')) (gc_le (mVar n') (mVar n))
+     | (Level.Var _, Lt, Level.lProp) => None
+     | (Level.Var _, Lt, Level.lSet) => None
+     | (Level.Var n, Lt, Level.Level l) => singleton (gc_lt (mVar n) (mLevel l))
+     | (Level.Var n, Lt, Level.Var n') => singleton (gc_lt (mVar n) (mVar n'))
+     end.
+
+Definition my_val0 (v : valuation) (l : my_level) : nat :=
+  match l with
+  | mLevel s => Pos.to_nat (v.(valuation_mono) s)
+  | mVar x => v.(valuation_poly) x
+  end.
+
+Definition my_satisfies0 v (gc : good_constraint) : bool :=
+  match gc with
+  | gc_le l l' => my_val0 v l <=? my_val0 v l'
+  | gc_lt l l' => my_val0 v l <? my_val0 v l'
+  | gc_lt_set l => 0 <? v.(valuation_poly) l
+  | gc_eq_set l => 0 =? v.(valuation_poly) l
+  end.
+
+Inductive on_Some {A} (P : A -> Prop) : option A -> Prop :=
+| no_some : forall x, P x -> on_Some P (Some x).
+
+Lemma on_Some_spec {A} (P : A -> Prop) z :
+  on_Some P z <-> exists x, z = Some x /\ P x.
+Proof.
+  split. intros []. now eexists.
+  intros [? [e ?]]. subst. now constructor.
+Qed.
+
+Definition my_satisfies v : GoodConstraintSet.t -> bool :=
+  GoodConstraintSet.for_all (my_satisfies0 v).
+
+Lemma if_true_false (b : bool) : (if b then true else false) = b.
+  destruct b; reflexivity.
+Qed.
+
+Lemma my_satisfies_pair v gc1 gc2 :
+  (my_satisfies0 v gc1 /\ my_satisfies0 v gc2) <->
+  my_satisfies v (GoodConstraintSet_pair gc1 gc2).
+Proof.
+  cbn; destruct (GoodConstraintDec.eq_dec gc2 gc1); cbn;
+    rewrite if_true_false.
+  now destruct e. symmetry. apply andb_and.
+Defined.
+
+
+Ltac gc_of_constraint_tac :=
+  match goal with
+  | |- is_true (if _ then true else false) => rewrite if_true_false
+  | |- is_true (_ <? _) => apply PeanoNat.Nat.ltb_lt
+  | |- is_true (_ <=? _) => apply PeanoNat.Nat.leb_le
+  | |- is_true (_ =? _) => apply PeanoNat.Nat.eqb_eq
+  | |- is_true (my_satisfies _ (GoodConstraintSet_pair _ _))
+               => apply my_satisfies_pair; cbn -[Nat.leb Nat.eqb]; split
+  | H : is_true (if _ then true else false) |- _ => rewrite if_true_false in H
+  | H : is_true (_ <? _) |- _ => apply PeanoNat.Nat.ltb_lt in H
+  | H : is_true (_ <=? _) |- _ => apply PeanoNat.Nat.leb_le in H
+  | H : is_true (_ =? _) |- _ => apply PeanoNat.Nat.eqb_eq in H
+  | H : is_true (my_satisfies _ (GoodConstraintSet_pair _ _)) |- _
+               => apply my_satisfies_pair in H; cbn -[Nat.leb Nat.eqb] in H;
+                 destruct H
+  end.
+
+Lemma gc_of_constraint_spec v uc :
+  satisfies0 v uc <-> on_Some (my_satisfies v) (gc_of_constraint uc).
+Proof.
+  split.
+  - destruct 1; destruct l, l'; try constructor; try reflexivity.
+    all: cbn -[Nat.leb Nat.eqb GoodConstraintSet_pair] in *.
+    all: repeat gc_of_constraint_tac; lia.
+  - destruct uc as [[[] []] []]; cbn; inversion 1; constructor.
+    all: cbn -[Nat.leb Nat.eqb GoodConstraintSet_pair] in *; try lia.
+    all: repeat gc_of_constraint_tac; lia.
+Qed.
+
+Definition add_gc_of_constraint uc (S : option GoodConstraintSet.t)
+  := S1 <- S ;; S2 <- gc_of_constraint uc ;;
+     ret (GoodConstraintSet.union S1 S2).
+
+Definition gc_of_constraints (ctrs : constraints) : option GoodConstraintSet.t
+  := ConstraintSet.fold add_gc_of_constraint
+                        ctrs (Some GoodConstraintSet.empty).
+
+
+Lemma iff_forall {A} B C (H : forall x : A, B x <-> C x)
+  : (forall x, B x) <-> (forall x, C x).
+  firstorder.
+Defined.
+
+Lemma gc_of_constraints_spec v ctrs :
+  satisfies v ctrs <-> on_Some (my_satisfies v) (gc_of_constraints ctrs).
+Proof.
+  unfold my_satisfies, satisfies, ConstraintSet.For_all, gc_of_constraints.
+  set (S := GoodConstraintSet.empty).
+  rewrite ConstraintSet.fold_spec.
+  etransitivity. eapply iff_forall.
+  intro; eapply imp_iff_compat_r. eapply ConstraintSetFact.elements_iff.
+  set (l := ConstraintSet.elements ctrs). simpl.
+  transitivity ((forall uc, InA eq uc l -> satisfies0 v uc) /\
+                (forall gc, GoodConstraintSet.In gc S -> my_satisfies0 v gc)). {
+    intuition. inversion H0. }
+  clearbody S; revert S; induction l; intro S.
+  - split.
+    + intro; constructor. apply GoodConstraintSetFact.for_all_1.
+      intros x y []; reflexivity.
+      intro; apply H.
+    + intros HS. split. intros ux H; inversion H.
+      cbn in HS. inversion_clear HS.
+      apply GoodConstraintSetFact.for_all_2.
+      intros x y []; reflexivity.
+      assumption.
+  - simpl. split.
+    + intros [H1 H2].
+      pose proof (proj1 (gc_of_constraint_spec v a)
+                        (H1 a (InA_cons_hd _ eq_refl))) as H.
+      apply on_Some_spec in H.
+      destruct H as [X [HX1 HX2]].
+      assert (add_gc_of_constraint a (Some S)
+              = Some (GoodConstraintSet.union S X)). {
+        cbn. rewrite HX1; reflexivity. }
+      rewrite H. apply IHl. split.
+      * intros uc H0. apply H1. now apply InA_cons_tl.
+      * intros gc H0. apply GoodConstraintSetFact.union_1 in H0.
+        induction H0. intuition.
+        apply GoodConstraintSetFact.for_all_2 in HX2.
+        apply HX2. assumption.
+        intros x y []; reflexivity.
+    + intros H.
+      unfold add_gc_of_constraint in H at 2.
+      cbn -[add_gc_of_constraint] in H.
+      remember (gc_of_constraint a) as o; destruct o.
+      * destruct (proj2 (IHl _) H) as [IH1 IH2]. clear IHl H.
+        split. intuition. apply InA_cons in H. induction H.
+        subst. apply gc_of_constraint_spec. rewrite <- Heqo.
+        constructor. apply GoodConstraintSetFact.for_all_1.
+        intros x y []; reflexivity.
+        intros gc Hgc. apply IH2.
+        now apply GoodConstraintSetFact.union_3.
+        firstorder.
+        intros gc Hgc. apply IH2.
+        now apply GoodConstraintSetFact.union_2.
+      * apply False_rect. revert H; clear.
+        induction l. inversion 1.
+        cbn -[add_gc_of_constraint].
+        assert (add_gc_of_constraint a None = None) by reflexivity.
+        now rewrite H.
+Qed.
+
+
 
 (* vertices of the graph are levels which are not Prop *)
 Inductive vertice := lSet | Level (_ : string) | Var (_ : nat).
@@ -41,6 +284,7 @@ Module VerticeDec.
     unfold eq.
     decide equality. apply string_dec. apply Peano_dec.eq_nat_dec.
   Defined.
+Definition eqb : t -> t -> bool := fun x y => if eq_dec x y then true else false.
 End VerticeDec.
 Module VerticeSet <: MSetInterface.WSetsOn VerticeDec := MSets.MSetWeakList.Make VerticeDec.
 Module VerticeMap := FSets.FMapWeakList.Make VerticeDec.
@@ -178,6 +422,10 @@ Section Graph.
   | R00 l : R0s l l
   | R01 l1 l2 l3 : R0s l1 l2 -> EdgeSet.In (l2,true,l3) (snd φ) -> R0s l1 l3.
 
+  (* Definition R0s_dec : forall x y, {R0s y x} + {~ R0s y x}. *)
+  (* Proof. *)
+
+
   Inductive R : vertice -> vertice -> Prop :=
   | Rintro l1 l2 l3 l4 : R0s l1 l2 -> EdgeSet.In (l2,false,l3) (snd φ)
                          -> R0s l3 l4 -> R l1 l4.
@@ -188,33 +436,123 @@ Section Graph.
     clos_trans _ (fun l l' => EdgeSet.In (l, true, l') (snd φ)
                            \/ EdgeSet.In (l, false, l') (snd φ)).
   
-  Conjecture R_dec : forall x y, {R x y} + {~ R x y}.
-  Conjecture Rs_dec : forall x y, {Rs x y} + {~ Rs x y}.
+  Definition R_dec : forall x y, {R y x} + {~ R y x}.
+  (* Proof. *)
+  (*   intros x y H; revert y; induction H; intro y. *)
+  (*   pose (VerticeSet.exists_ (fun pred => EdgeSet.exists_ (fun e => (VerticeDec.eqb (fst (fst e)) pred) && (VerticeDec.eqb (snd e) x)) (snd φ)) (fst φ)). *)
+  (*   case_eq b; intro ee. *)
+  (*   subst b. apply VerticeSet.exists_spec in ee. *)
+    
+  (*   remember b. *)
+  (*   destruct b0. *)
+  (*   assert (pred : vertice). *)
+  Admitted.    
 
-  Fixpoint preds l (L : list vertice) : list {l' & R l' l} :=
-    match L with
+
+  Conjecture Rs_dec : forall x y, {Rs y x} + {~ Rs y x}.
+
+  Fixpoint filter_pack {A} (P : A -> Prop) (HP : forall x, {P x} + {~ P x})
+           (l : list A) {struct l} : list {x : A & P x} :=
+    match l with
     | [] => []
-    | l' :: L => match R_dec l' l with
-                | left p => (existT _ _ p) :: (preds l L)
-                | right _ => preds l L
-                end
+    | x :: l => match HP x with
+               | left p => (existT _ _ p) :: (filter_pack P HP l)
+               | right _ => filter_pack P HP l
+               end
     end.
 
   Definition d (s l : vertice) (H : Acc R l) : option Z.
     destruct (Rs_dec s l) as [_|_]; [apply Some|apply None].
-    induction H as [l H d].
-    simple refine (let preds := preds l (VerticeSet.elements (fst φ)) in _).
+    induction H as [v H d].
+    simple refine (let preds := filter_pack (fun v' => R v' v) (R_dec v)
+                                            (VerticeSet.elements (fst φ)) in _).
     exact (List.fold_left (fun n X => Z.min n (d X.1 X.2)) preds 0).
   Defined.
 
 End Graph.  
 
+Definition d_Set ctrs φ (e : make_graph ctrs = Some φ)
+  : forall l, VerticeSet.In l (fst φ) -> Rs φ lSet l.
+Abort.
+
+Definition valuation_of_graph φ (H: well_founded (R φ)) : valuation.
+Proof.
+  pose (V := fst φ). pose (E := snd φ).
+  unshelve econstructor.
+  refine (fun s => if VerticeSet.mem (Level s) V then BinIntDef.Z.to_pos (option_get 1 (d φ lSet (Level s) (H _))) else 1%positive).
+  refine (fun n => if VerticeSet.mem (Var n) V then Z.to_nat (option_get 0 (d φ lSet (Var n) (H _))) else 0%nat).
+Defined.
+
+Lemma Acc_ok1 ctrs : (exists φ, make_graph ctrs = Some φ /\ well_founded (R φ)) -> consistent ctrs.
+Proof.
+  intros [φ [H1 H2]].
+  exists (valuation_of_graph φ H2).
+  unfold satisfies. intros [[l1 []] l2] Huc; constructor.
+  - destruct l1, l2.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * cbn.
+ assert (e: d φ lSet (Level s) (H2 (Level s)) < d φ lSet (Level s0) (H2 (Level s0))).
+ 
+
+assert (d φ lSet l1 < d φ lSet l2).
+
+
+  unfold satisfies0. intros uc Huc.
+  
+
+  revert φ H1 H2.
+  induction ctrs using ConstraintSetProp.set_induction;
+    intros φ H1 H2.
+  - intros x Hx. apply False_rect.
+    apply (ConstraintSetFact.empty_iff x).
+    eapply ConstraintSetFact.In_m. reflexivity.
+    2: eassumption. symmetry.
+    now apply ConstraintSetProp.empty_is_empty_1.
+  - assert (satisfies0 (valuation_of_graph φ H2) x) . {
+      assert (Hc : ConstraintSet.In x ctrs2). admit. (* ok *)
+      clear H H0 IHctrs1 ctrs1.
+      destruct x as [[l1 []] l2]; econstructor.
+      + destruct l1, l2.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * admit.
+        * cbn. assert (e: VerticeSet.mem (Level s) (fst φ) = true). admit.
+          rewrite e.
+          assert ((d φ lSet (Level s) (H2 (Level s))) < (d φ lSet (Level s) (H2 (Level s0)))).
+
+}
+
+ unfold make_graph in H1.
+    unfold edges_of_constraints in H1.
+    rewrite ConstraintSetProp.fold_1b in H1.
+    unfold add_nodes_of_constraints in H1.
+    rewrite ConstraintSetProp.fold_1b in H1.
+
+
 Definition is_Some {A} (x : option A) := exists a, x = Some a.
 
 Conjecture Acc_ok : forall ctrs, consistent ctrs <-> exists φ, make_graph ctrs = Some φ /\ well_founded (R φ).
+
 Conjecture d_ok   : forall ctrs φ (e : make_graph ctrs = Some φ) (H : well_founded (R φ)) l l',
     (exists k, forall v, satisfies v ctrs -> (val0 v (vtl l) <= (val0 v (vtl l')) + k)%Z)
     <-> is_Some (d φ l l' (H _)).
+
 Conjecture d_ok2  : forall ctrs φ (e : make_graph ctrs = Some φ) (H : well_founded (R φ)) l l' k,
     (forall v, satisfies v ctrs -> (val0 v (vtl l) <= (val0 v (vtl l')) + k)%Z)
     <-> (forall k', d φ l l' (H _) = Some k' -> k >= k').

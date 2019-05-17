@@ -332,7 +332,7 @@ Record valuation :=
   { valuation_mono : string -> positive ;
     valuation_poly : nat -> nat }.
 
-Fixpoint val0 (v : valuation) (l : Level.t) : Z :=
+Definition val0 (v : valuation) (l : Level.t) : Z :=
   match l with
   | lProp => -1
   | lSet => 0
