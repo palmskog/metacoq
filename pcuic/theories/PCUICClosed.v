@@ -279,7 +279,7 @@ Proof.
   - rewrite closedn_subst_instance_constr.
     eapply declared_inductive_inv in X0; eauto.
     apply onArity in X0. repeat red in X0.
-    destruct X0 as [Hisa [s Hs] _]. rewrite -> andb_and in Hs.
+    destruct X0 as [s Hs]. rewrite -> andb_and in Hs.
     intuition eauto using closed_upwards with arith.
 
   - destruct isdecl as [Hidecl Hcdecl].
@@ -310,12 +310,12 @@ Proof.
     simpl. apply closedn_mkApps_inv in H2.
     rewrite forallb_rev H1. apply H2.
     rewrite closedn_subst_instance_constr.
-    eapply declared_projection_inv in isdecl; eauto.
-    red in isdecl.
-    destruct decompose_prod_assum eqn:Heq.
-    destruct isdecl as [[s Hs] Hc]. simpl in *.
-    rewrite <- Hc in H0. rewrite List.rev_length H0.
-    rewrite andb_true_r in Hs.
+    apply on_declared_projection in isdecl as [[Hmdecl Hidecl] Hpdecl].
+    red in Hpdecl.
+    destruct Hpdecl as [s Hs]. simpl in *.
+    apply onNpars in Hmdecl.
+    rewrite List.rev_length H0.
+
     eauto using closed_upwards with arith.
 
   - split. solve_all.

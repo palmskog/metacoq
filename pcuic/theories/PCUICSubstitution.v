@@ -21,9 +21,6 @@ Existing Instance config.default_checker_flags.
 
 Definition subst_decl s k (d : context_decl) := map_decl (subst s k) d.
 
-Definition subst_context n k (Γ : context) : context :=
-  fold_context (fun k' => subst n (k' + k)) Γ.
-
 (** Well-typed substitution into a context with *no* let-ins *)
 
 Inductive subs  Σ (Γ : context) : list term -> context -> Type :=
