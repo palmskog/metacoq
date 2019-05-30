@@ -1194,7 +1194,7 @@ Section Checker.
     else check_wf_declarations (snd Σ) (fst Σ).
 
   Definition typecheck_program (p : program) : EnvCheck term :=
-    let Σ := reconstruct_global_context (fst p) in
+    let Σ := reconstruct_global_context (rev (fst p)) in
     check_wf_env Σ ;; infer_term Σ (snd p).
 
 End Checker.
