@@ -15,29 +15,19 @@ authors: ["Abhishek Anand <aa755@cs.cornell.edu>"
           "Théo Winterhalter <theo.winterhalter@inria.fr>"
 ]
 license: "MIT"
-build: [
-  [make "-j%{jobs}%" "template-coq"]
-  [make "-j%{jobs}%" "checker"]
-]
-install: [
-  [make "-C" "checker" "install"]
-]
 depends: [
   "ocaml" {> "4.02.3"}
   "coq" {>= "8.8" & < "8.9~"}
   "coq-metacoq-template" {= version}
+  "coq-metacoq-checker" {= version}
+  "coq-metacoq-pcuic" {= version}
+  "coq-metacoq-extraction" {= version}
 ]
-synopsis: "Specification of Coq's type theory and reference checker implementation"
+synopsis: "A meta-programming framework for Coq"
 description: """
 MetaCoq is a meta-programming framework for Coq.
 
-The Checker module provides a complete specification of Coq's typing and conversion
-relation along with a reference type-checker that is extracted to a pluging.
-
-This provides a command: `MetaCoq Check [global_reference]` that can be used
-to typecheck a Coq definition using the verified type-checker.
+The meta-package includes the template-coq library, verified checker,
+PCUIC development and extraction. See individual packages for more detailed
+descriptions.
 """
-# url {
-#   src: "https://github.com/MetaCoq/metacoq/archive/v2.1-beta3.tar.gz"
-#   checksum: "md5=e81b8ecabef788a10337a39b095d54f3"
-# }
